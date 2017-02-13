@@ -1,1 +1,2 @@
 includes: ['layer:basic', 'layer:apt']
+repo: "git@github.com:LeandroOrdonez/superset.git"
