@@ -8,31 +8,25 @@ from charmhelpers.core.hookenv import status_set
 import charms.apt
 
 @when_not('superset.installed')
-def setup():
-    hookenv.log('Installing dependencies for Superset')
-    charms.apt.queue_install(['build-essential', 'libssl-dev', 'libffi-dev', 'python-dev', 'python-pip', 'libsasl2-dev', 'libldap2-dev'])
-    charms.apt.install_queued()
-    status_set('maintenance', 'Installing dependencies for superset')
-
-@when_not('superset.installed')
 @when('apt.installed.build-essential',
       'apt.installed.libssl-dev',
       'apt.installed.libffi-dev',
-      'apt.installed.python-dev',
-      'apt.installed.python-pip',
+      'apt.installed.python3-dev',
+      'apt.installed.python3-pip',
       'apt.installed.libsasl2-dev',
       'apt.installed.libldap2-dev')
 def install_superset():
     status_set('maintenance', 'Installing superset')
     #init_virtualenv()
     hookenv.log('Installing Superset')
-    subprocess.check_call(['pip','install', '--upgrade', 'setuptools', 'pip'])
-    subprocess.check_call(['pip','install', 'superset'])
+    subprocess.check_call(['pip3','install', '--upgrade', 'setuptools', 'pip'])
+    subprocess.check_call(['pip3','install', 'superset'])
     set_state('superset.installed')
 
     hookenv.log('Switching to user ubuntu')
     subprocess.check_call(['su', '-', 'ubuntu'])
     hookenv.log('whoami: %s' % subprocess.check_output(['whoami']).strip())
+    hookenv.log('cat /etc/passwd | grep ubuntu: %s' % subprocess.check_output('cat /etc/passwd | grep ubuntu', shell=True).strip())
     hookenv.log('cwd: %s' % os.getcwd())
 
 @when('superset.installed')
@@ -79,8 +73,8 @@ def superset_startup():
     hookenv.log('Create default roles and permissions')
     subprocess.check_call(['superset', 'init'])
     # Start the web server on port 8088, use -p to bind to another port
-    #hookenv.log('Start the web server on port 8088')
-    #subprocess.check_call(['superset', 'runserver'])
+    hookenv.log('Start the web server on port 8088')
+    subprocess.Popen(['superset', 'runserver'])
     set_state('superset.ready')
     status_set('active', 'Superset up and running')
 
