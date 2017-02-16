@@ -2,6 +2,7 @@ import subprocess
 import pexpect
 import os
 import sys
+import pwd
 from charms.reactive import when, when_not, set_state
 from charmhelpers.core import hookenv
 from charmhelpers.core.hookenv import status_set
@@ -44,7 +45,7 @@ def superset_setup():
     # Password:
     # Repeat for confirmation:
     hookenv.log('Creating admin user for Superset')
-    child = pexpect.spawn('fabmanager create-admin --app superset')
+    child = pexpect.spawn("su - ubuntu -c \"fabmanager create-admin --app superset\"")
     child.expect('\\r\\nUsername \[admin\]: ')
     child.sendline('admin')
     child.expect('\\r\\nUser first name \[admin\]: ')
@@ -59,10 +60,10 @@ def superset_setup():
     child.sendline('admin')
     # Initialize the database
     hookenv.log('Initialize the database')
-    subprocess.check_call(['superset','db', 'upgrade'])
+    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset db upgrade'])
     # Load some data to play with
     hookenv.log('Load some data to play with')
-    subprocess.check_call(['superset', 'load_examples'])
+    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset load_examples'])
     set_state('superset.configured')
 
 @when('superset.installed',
@@ -71,38 +72,43 @@ def superset_setup():
 def superset_startup():
     # Create default roles and permissions
     hookenv.log('Create default roles and permissions')
-    subprocess.check_call(['superset', 'init'])
+    #subprocess.check_call(['superset', 'init'])
+    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset init'])
     # Start the web server on port 8088, use -p to bind to another port
     hookenv.log('Start the web server on port 8088')
-    subprocess.Popen(['superset', 'runserver'])
+    #subprocess.Popen(['superset', 'runserver'])
+    subprocess.Popen(['su', '-', 'ubuntu', '-c', 'superset runserver'])
     set_state('superset.ready')
     status_set('active', 'Superset up and running')
 
-def init_virtualenv():
-    venv = os.path.abspath('./venv')
-    hookenv.log('Virtualenv path: %s' % venv)
-    vbin = os.path.join(venv, 'bin')
-    vpip = os.path.join(vbin, 'pip')
-    vpy = os.path.join(vbin, 'python')
+def run_command_as_user(command, user_name='ubuntu'):
+    pw_record = pwd.getpwnam(user_name)
+    user_name      = pw_record.pw_name
+    user_home_dir  = pw_record.pw_dir
+    user_uid       = pw_record.pw_uid
+    user_gid       = pw_record.pw_gid
+    cwd = os.getcwd()
+    env = os.environ.copy()
+    env[ 'HOME'     ]  = user_home_dir
+    env[ 'LOGNAME'  ]  = user_name
+    env[ 'PWD'      ]  = cwd
+    env[ 'USER'     ]  = user_name
+    report_ids('starting ' + str(command))
+    process = subprocess.Popen(
+        command, preexec_fn=demote(user_uid, user_gid), cwd=cwd, env=env
+    )
+    result = process.wait()
+    report_ids('finished ' + str(command))
+    hookenv.log('result %s' % result)
 
-    hookenv.log('Installing virtualenv')
-    subprocess.check_call(['pip','install', 'virtualenv'])
-
-    hookenv.log('Switching to user ubuntu')
-    subprocess.check_call(['su', '-', 'ubuntu'])
-
-    hookenv.log('Creating a virtualenv in %s' % venv)
-    subprocess.check_call(['virtualenv', '--python=python3', 'venv'])
-
-    hookenv.log('Activating venv')
-    os.environ['PATH'] = ':'.join([vbin, os.environ['PATH']])
-    reload_interpreter(vpy)
+def demote(user_uid, user_gid):
+    def result():
+        report_ids('starting demotion')
+        os.setgid(user_gid)
+        os.setuid(user_uid)
+        report_ids('finished demotion')
+    return result
 
 
-def reload_interpreter(python):
-    """
-    Reload the python interpreter to ensure that all deps are available.
-    Newly installed modules in namespace packages sometimes seemt to
-    not be picked up by Python 3.
-    """
-    os.execle(python, python, sys.argv[0], os.environ)
+def report_ids(msg):
+    hookenv.log('uid, gid = %d, %d; %s' % (os.getuid(), os.getgid(), msg))
