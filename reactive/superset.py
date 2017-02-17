@@ -4,8 +4,9 @@ import os
 import sys
 import pwd
 from charms.reactive import when, when_not, set_state
-from charmhelpers.core import hookenv
+from charmhelpers.core import hookenv, host, templating
 from charmhelpers.core.hookenv import status_set
+from jujubigdata import utils
 import charms.apt
 
 @when_not('superset.installed')
@@ -37,6 +38,37 @@ def superset_setup():
     # Setting LC_ALL and LANG vbles
     os.environ['LC_ALL'] = 'C.UTF-8'
     os.environ['LANG'] = 'C.UTF-8'
+
+    # Initialize the database
+    hookenv.log('Initialize the database')
+    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset db upgrade'])
+    # Load some data to play with
+    hookenv.log('Load some data to play with')
+    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset load_examples'])
+
+    set_state('superset.configured')
+
+@when('superset.installed',
+      'superset.configured')
+@when_not('superset.ready')
+def superset_startup():
+
+    superset_dir = '/home/ubuntu/superset'
+    db_uri = 'sqlite:////home/ubuntu/.superset/superset.db'
+    context = {
+        'db_uri': db_uri
+    }
+    host.mkdir(superset_dir)
+    templating.render(
+        source='superset_config.py.jinja2',
+        target=superset_dir + '/superset_config.py',
+        context=context
+    )
+
+    with utils.environment_edit_in_place('/etc/environment') as env:
+        # Appending superset_config.py to the PYTHONPATH
+        env['PYTHONPATH'] = "$PYTHONPATH:%s" % (superset_dir + '/superset_config.py')
+
     # Create an admin user (you will be prompted to set username, first and last name before setting a password)
     # Username [admin]:
     # User first name [admin]:
@@ -47,29 +79,18 @@ def superset_setup():
     hookenv.log('Creating admin user for Superset')
     child = pexpect.spawn("su - ubuntu -c \"fabmanager create-admin --app superset\"")
     child.expect('\\r\\nUsername \[admin\]: ')
-    child.sendline('admin')
+    child.sendline()
     child.expect('\\r\\nUser first name \[admin\]: ')
-    child.sendline('admin')
+    child.sendline()
     child.expect('\\r\\nUser last name \[user\]: ')
-    child.sendline('user')
+    child.sendline()
     child.expect('\\r\\nEmail \[admin@fab.org\]: ')
-    child.sendline('admin@fab.org')
+    child.sendline()
     child.expect('\\r\\nPassword: ')
     child.sendline('admin')
     child.expect('\\r\\nRepeat for confirmation: ')
     child.sendline('admin')
-    # Initialize the database
-    hookenv.log('Initialize the database')
-    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset db upgrade'])
-    # Load some data to play with
-    hookenv.log('Load some data to play with')
-    subprocess.check_call(['su', '-', 'ubuntu', '-c', 'superset load_examples'])
-    set_state('superset.configured')
 
-@when('superset.installed',
-      'superset.configured')
-@when_not('superset.ready')
-def superset_startup():
     # Create default roles and permissions
     hookenv.log('Create default roles and permissions')
     #subprocess.check_call(['superset', 'init'])
@@ -78,37 +99,6 @@ def superset_startup():
     hookenv.log('Start the web server on port 8088')
     #subprocess.Popen(['superset', 'runserver'])
     subprocess.Popen(['su', '-', 'ubuntu', '-c', 'superset runserver'])
+
     set_state('superset.ready')
     status_set('active', 'Superset up and running')
-
-def run_command_as_user(command, user_name='ubuntu'):
-    pw_record = pwd.getpwnam(user_name)
-    user_name      = pw_record.pw_name
-    user_home_dir  = pw_record.pw_dir
-    user_uid       = pw_record.pw_uid
-    user_gid       = pw_record.pw_gid
-    cwd = os.getcwd()
-    env = os.environ.copy()
-    env[ 'HOME'     ]  = user_home_dir
-    env[ 'LOGNAME'  ]  = user_name
-    env[ 'PWD'      ]  = cwd
-    env[ 'USER'     ]  = user_name
-    report_ids('starting ' + str(command))
-    process = subprocess.Popen(
-        command, preexec_fn=demote(user_uid, user_gid), cwd=cwd, env=env
-    )
-    result = process.wait()
-    report_ids('finished ' + str(command))
-    hookenv.log('result %s' % result)
-
-def demote(user_uid, user_gid):
-    def result():
-        report_ids('starting demotion')
-        os.setgid(user_gid)
-        os.setuid(user_uid)
-        report_ids('finished demotion')
-    return result
-
-
-def report_ids(msg):
-    hookenv.log('uid, gid = %d, %d; %s' % (os.getuid(), os.getgid(), msg))
